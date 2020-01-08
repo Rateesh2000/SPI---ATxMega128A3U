@@ -1,0 +1,86 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+
+//USART on PORTD, MASTER on PORTC
+
+void USARTXInit(void)
+{
+	PORTD_DIRSET = PIN3_bm;			//set pin 3 as output pin (TX)
+	PORTD_DIRCLR = PIN2_bm;			//set pin 2 as input pin (RX)
+	USARTD0_BAUDCTRLA = 0X0C;			//set baud rate 9600
+	USARTD0_BAUDCTRLB = 0;
+	USARTD0_CTRLC = (USART_CHSIZE_8BIT_gc)|(USART_PMODE_DISABLED_gc);			//set character size and disable parity mode
+	USARTD0_CTRLB = (USART_RXEN_bm)|(USART_TXEN_bm);				//enable TX and RX pins
+}
+
+void USARTXTrans(uint8_t dat)
+{
+	while (!(USARTD0_STATUS & USART_DREIF_bm));				//wait till there is data to transmit
+	USARTD0_DATA = dat;					//transmit the data
+}
+
+uint8_t USARTXRec()
+{
+	while (!(USARTD0_STATUS & USART_RXCIF_bm));				//wait till there is data to receive
+	return USARTD0_DATA;				//receive the data
+}
+
+int main(void)
+{
+	USARTXInit();
+	sei();					//enable global interrupts
+	PMIC_CTRL = 0x07;		//enable high,med and low level interrupts
+	
+	uint8_t tx_byte;		//variable to store data to be transmitted
+
+	/* Configure GPIO */
+	PORTC_DIR = 0xB0;          // MOSI, SCK, SS outputs; MISO input, MASTER
+	PORTC_OUTSET = 0x10;       // de-assert SS pin (active low)
+
+	PORTF_DIRSET = 0xFF;		//set pins on PORTF as output to check on LED's
+	
+	/* Configure SPI on PORTC */
+	SPIC_CTRL = 0x50;          // spi master, spi mode 0
+
+	/* Flush master buffer */
+	while(SPIC_STATUS & 0x80) 
+	{
+		tx_byte = SPIC_DATA;   // flush spi buffer
+	}
+
+	tx_byte=10;
+	SPIC_DATA = 0;
+	while(1) 
+	{
+		//tx_byte = USARTXRec();		//uncomment to receive data from terminal
+		USARTD0_CTRLA = 0x3C;				//enable TXC and RXC interrupts
+		
+		///// SPI Master operation /////
+		PORTC_OUTCLR = 0x10;			     // assert SS pin (active low)
+		SPIC_DATA = tx_byte;				 // send received data
+		while(!(SPIC_STATUS & 0x80))	     // wait for transmit complete
+		{ 
+			PORTF_OUTSET = 0x02;			//LED at PF1 will glow
+			_delay_ms(500);
+		}
+		PORTF_OUTCLR = 0x02;				//LED at PF1 will stop glowing
+		_delay_ms(500);
+		
+		PORTC_OUTSET = 0x10;          // de-assert SS pin
+
+		//tx_byte = SPIC_DATA;          // store character received from slave (int flag auto cleared)
+	}
+}
+
+ISR(USARTD0_TXC_vect)				//Interrupt Service Routine for data transmission complete interrupt (TXCINT)
+{
+	USARTXTrans('T');				//marker to know that program flow entered here
+	USARTD0_CTRLA = 0x30;			//disable the TXC interrupt to avoid an infinite loop (recursive)
+}
+
+ISR(USARTD0_RXC_vect)				//Interrupt Service Routine for data reception complete interrupt (RXCINT)
+{
+	USARTD0_CTRLA = 0x30;			//disable the TXC interrupt to avoid an infinite loop (recursive)
+	USARTXTrans('R');				//marker to know that program flow entered here
+}
