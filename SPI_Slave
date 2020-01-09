@@ -1,0 +1,80 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+
+//PORTD is USART, PORTC is SLAVE
+
+void USARTXInit(void)
+{
+	PORTD_DIRSET = PIN3_bm; //set pin 3 as output pin (TX)
+	PORTD_DIRCLR = PIN2_bm; //set pin 2 as input pin (RX)
+	USARTD0_BAUDCTRLA = 0X0C; //set baud rate 9600
+	USARTD0_BAUDCTRLB = 0;
+	USARTD0_CTRLC = (USART_CHSIZE_8BIT_gc)|(USART_PMODE_DISABLED_gc); //set character size and disable parity mode
+	USARTD0_CTRLB = (USART_RXEN_bm)|(USART_TXEN_bm); //enable TX and RX pins
+}
+
+void USARTXTrans(uint8_t dat)
+{
+	while (!(USARTD0_STATUS & USART_DREIF_bm)); //wait till there is data to transmit
+	USARTD0_DATA = dat; //transmit the data
+}
+
+uint8_t USARTXRec()
+{
+	while (!(USARTD0_STATUS & USART_RXCIF_bm)); //wait till there is data to receive
+	return USARTD0_DATA; //receive the data
+}
+
+int main(void)
+{
+	USARTXInit();
+	sei();					 //enable global interrupts
+	PMIC_CTRL = 0x07;		 //enable high,med and low level interrupts
+
+	uint8_t rx_byte;		 //variable to store received data
+
+	/* Configure GPIO */
+	PORTC_DIR = 0x40;          // MISO output; MOSI, SCK, SS inputs, SLAVE
+	
+	PORTF_DIRSET = 0xFF;		//set pins on PORTF as output to check on LED's
+
+	/* Configure SPI on PORTC and PORTF */
+	SPIC_CTRL = 0x40;          // spi slave, spi mode 0
+
+	/* Flush slave buffer */
+	while(SPIC_STATUS & 0x80) {
+		rx_byte = SPIC_DATA;   // flush spi receive buffer
+	}
+
+	SPIC_DATA = 0;
+	while(1)
+	{
+		USARTD0_CTRLA = 0x3C; //enable TXC and RXC interrupts
+
+		////// SPI Slave operation /////
+		
+		PORTF_OUTSET = 0x02;				 //LED at PF1 will glow
+		_delay_ms(500);
+		
+		rx_byte = SPIC_DATA;				 // grab received byte
+		while (!(SPIC_STATUS & 0x80));		 //wait till reception is complete
+		
+		PORTF_OUTCLR = 0x02;				 //LED at PF1 will stop glowing
+		_delay_ms(500);
+		
+		USARTXTrans(rx_byte);
+	}
+}
+
+ISR(USARTD0_TXC_vect)				//Interrupt Service Routine for data transmission complete interrupt (TXCINT)
+{
+	USARTXTrans('T');				//marker to know that program flow entered here
+	USARTD0_CTRLA = 0x30;			//disable the TXC interrupt to avoid an infinite loop (recursive)
+}
+
+ISR(USARTD0_RXC_vect)				//Interrupt Service Routine for data reception complete interrupt (RXCINT)
+{
+	USARTD0_CTRLA = 0x30;			//disable the TXC interrupt to avoid an infinite loop (recursive)
+	USARTXTrans('R');				//marker to know that program flow entered here
+}
